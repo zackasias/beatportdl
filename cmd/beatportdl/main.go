@@ -17,9 +17,8 @@ import (
 )
 
 const (
-	configFilename = "beatportdl-config.yml"
-	cacheFilename  = "beatportdl-credentials.json"
-	errorFilename  = "beatportdl-err.log"
+	cacheFilename = "beatportdl-credentials.json"
+	errorFilename = "beatportdl-err.log"
 )
 
 type application struct {
@@ -41,12 +40,52 @@ type application struct {
 }
 
 func main() {
-	cfg, cachePath, err := Setup()
-	if err != nil {
-		fmt.Println(err.Error())
-		Pause()
+	// List your YAML files here
+	configFiles := []string{
+		"/home/ubuntu/.config/beatportdl/config1.yml",
+		"/home/ubuntu/.config/beatportdl/config2.yml",
+		"/home/ubuntu/.config/beatportdl/config3.yml",
 	}
 
+	var cfg *config.AppConfig
+	var cachePath string
+	var auth *beatport.Auth
+	var bp, bs *beatport.Beatport
+	var loginSuccess bool
+
+	// Try each config until login succeeds
+	for _, cfgPath := range configFiles {
+		var err error
+		cfg, err = config.Parse(cfgPath)
+		if err != nil {
+			fmt.Println("Failed to parse", cfgPath, ":", err)
+			continue
+		}
+
+		cachePath = strings.Replace(cfgPath, ".yml", "-credentials.json", 1)
+		auth = beatport.NewAuth(cfg.Username, cfg.Password, cachePath)
+		bp = beatport.New(beatport.StoreBeatport, cfg.Proxy, auth)
+		bs = beatport.New(beatport.StoreBeatsource, cfg.Proxy, auth)
+
+		// Attempt login
+		if err := auth.LoadCache(); err != nil {
+			if err := auth.Init(bp); err != nil {
+				fmt.Println("Login failed with", cfgPath, "trying next...")
+				continue
+			}
+		}
+
+		fmt.Println("Login successful with", cfgPath)
+		loginSuccess = true
+		break
+	}
+
+	if !loginSuccess {
+		fmt.Println("All configs failed. Exiting.")
+		os.Exit(1)
+	}
+
+	// Context and application setup
 	ctx, cancel := context.WithCancel(context.Background())
 
 	app := &application{
@@ -55,6 +94,8 @@ func main() {
 		globalSem:   make(chan struct{}, cfg.MaxGlobalWorkers),
 		ctx:         ctx,
 		logWriter:   os.Stdout,
+		bp:          bp,
+		bs:          bs,
 	}
 
 	go func() {
@@ -62,14 +103,11 @@ func main() {
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 		<-sigCh
-
 		if len(app.urls) > 0 {
 			app.LogInfo("Shutdown signal received. Waiting for download workers to finish")
 			cancel()
-
 			<-sigCh
 		}
-
 		os.Exit(0)
 	}()
 
@@ -87,21 +125,8 @@ func main() {
 		defer f.Close()
 	}
 
-	auth := beatport.NewAuth(cfg.Username, cfg.Password, cachePath)
-	bp := beatport.New(beatport.StoreBeatport, cfg.Proxy, auth)
-	bs := beatport.New(beatport.StoreBeatsource, cfg.Proxy, auth)
-
-	if err := auth.LoadCache(); err != nil {
-		if err := auth.Init(bp); err != nil {
-			app.FatalError("beatport", err)
-		}
-	}
-
-	app.bp = bp
-	app.bs = bs
-
+	// Parse CLI args
 	quitFlag := flag.Bool("q", false, "Quit the main loop after finishing")
-
 	flag.Parse()
 	inputArgs := flag.Args()
 
