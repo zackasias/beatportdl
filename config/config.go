@@ -73,11 +73,14 @@ func FFMPEGInstalled() bool {
 	return err == nil
 }
 
+// Parse reads a single YAML config file
 func Parse(filePath string) (*AppConfig, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, err
 	}
+	defer file.Close()
+
 	config := AppConfig{
 		Quality:                   "lossless",
 		CoverSize:                 DefaultCoverSize,
@@ -97,6 +100,7 @@ func Parse(filePath string) (*AppConfig, error) {
 		MaxGlobalWorkers:          15,
 		MaxDownloadWorkers:        15,
 	}
+
 	decoder := yaml.NewDecoder(file)
 	if err := decoder.Decode(&config); err != nil {
 		return nil, fmt.Errorf("failed to decode config file: %w", err)
@@ -143,6 +147,19 @@ func Parse(filePath string) (*AppConfig, error) {
 	}
 
 	return &config, nil
+}
+
+// ParseMultiple tries multiple YAML files in order and returns the first valid one
+func ParseMultiple(files []string) (*AppConfig, string, error) {
+	for _, f := range files {
+		cfg, err := Parse(f)
+		if err != nil {
+			fmt.Println("Failed to parse", f, ":", err)
+			continue
+		}
+		return cfg, f, nil
+	}
+	return nil, "", fmt.Errorf("all config files failed to load")
 }
 
 func (c *AppConfig) Save(filePath string) error {
