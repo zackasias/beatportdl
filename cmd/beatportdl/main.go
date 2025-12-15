@@ -9,26 +9,18 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
-
 	"unspok3n/beatportdl/config"
 	"unspok3n/beatportdl/internal/beatport"
 )
 
 const (
-	// Required by utils.go
-	configFilename = "beatportdl-config.yml"
-	errorFilename  = "beatportdl-err.log"
+	// KEEP this to satisfy utils.go, but cache is DISABLED
+	cacheFilename = ""
+	errorFilename = "beatportdl-err.log"
 )
-
-type account struct {
-	cfg *config.AppConfig
-	bp  *beatport.Beatport
-	bs  *beatport.Beatport
-}
 
 type application struct {
 	config      *config.AppConfig
@@ -48,82 +40,85 @@ type application struct {
 	bs *beatport.Beatport
 }
 
-var (
-	accounts      []*account
-	activeAccount int
-	accountMutex  sync.Mutex
-)
-
 func main() {
 
-	configDir := "/home/ubuntu/.config/beatportdl"
-
-	entries, err := os.ReadDir(configDir)
-	if err != nil {
-		fmt.Println("Failed to read config directory:", err)
-		os.Exit(1)
+	// === MULTIPLE ACCOUNT CONFIG FILES ===
+	configFiles := []string{
+		"/home/ubuntu/.config/beatportdl/config1.yml",
+		"/home/ubuntu/.config/beatportdl/config2.yml",
+		"/home/ubuntu/.config/beatportdl/config3.yml",
 	}
 
-	// 🔹 Load ALL accounts
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yml") {
-			continue
-		}
+	var (
+		cfg          *config.AppConfig
+		auth         *beatport.Auth
+		bp, bs       *beatport.Beatport
+		loginSuccess bool
+	)
 
-		cfgPath := filepath.Join(configDir, entry.Name())
-		cfg, err := config.Parse(cfgPath)
+	// === TRY EACH ACCOUNT UNTIL LOGIN SUCCESS ===
+	for _, cfgPath := range configFiles {
+
+		var err error
+		cfg, err = config.Parse(cfgPath)
 		if err != nil {
+			fmt.Println("Config error:", cfgPath, err)
 			continue
 		}
 
-		auth := beatport.NewAuth(cfg.Username, cfg.Password, "") // NO CACHE
-		bp := beatport.New(beatport.StoreBeatport, cfg.Proxy, auth)
-		bs := beatport.New(beatport.StoreBeatsource, cfg.Proxy, auth)
+		// CACHE PATH EMPTY → NO JSON CREATED
+		auth = beatport.NewAuth(cfg.Username, cfg.Password, "")
 
+		bp = beatport.New(beatport.StoreBeatport, cfg.Proxy, auth)
+		bs = beatport.New(beatport.StoreBeatsource, cfg.Proxy, auth)
+
+		fmt.Println("Logging in:", cfgPath)
+
+		// FORCE LIVE LOGIN (NO CACHE)
 		if err := auth.Init(bp); err != nil {
-			fmt.Println("❌ Login failed:", entry.Name())
+			fmt.Println("Login failed:", cfgPath)
 			continue
 		}
 
-		fmt.Println("✅ Loaded account:", entry.Name())
-		accounts = append(accounts, &account{
-			cfg: cfg,
-			bp:  bp,
-			bs:  bs,
-		})
+		fmt.Println("Login successful with:", cfgPath)
+		loginSuccess = true
+		break
 	}
 
-	if len(accounts) == 0 {
-		fmt.Println("❌ No valid accounts available")
+	if !loginSuccess {
+		fmt.Println("❌ All accounts failed. Exiting.")
 		os.Exit(1)
 	}
 
+	// === CONTEXT ===
 	ctx, cancel := context.WithCancel(context.Background())
 
 	app := &application{
-		config:      accounts[0].cfg,
-		bp:          accounts[0].bp,
-		bs:          accounts[0].bs,
-		downloadSem: make(chan struct{}, accounts[0].cfg.MaxDownloadWorkers),
-		globalSem:   make(chan struct{}, accounts[0].cfg.MaxGlobalWorkers),
+		config:      cfg,
+		downloadSem: make(chan struct{}, cfg.MaxDownloadWorkers),
+		globalSem:   make(chan struct{}, cfg.MaxGlobalWorkers),
 		ctx:         ctx,
 		logWriter:   os.Stdout,
+		bp:          bp,
+		bs:          bs,
 	}
 
+	// === SIGNAL HANDLING ===
 	go func() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 		<-sigCh
 		if len(app.urls) > 0 {
-			app.LogInfo("Shutdown signal received. Waiting for download workers to finish")
+			app.LogInfo("Shutdown signal received, waiting for downloads...")
 			cancel()
 			<-sigCh
 		}
 		os.Exit(0)
 	}()
 
-	if app.config.WriteErrorLog {
+	// === ERROR LOG ===
+	if cfg.WriteErrorLog {
 		logFilePath, _, err := FindErrorLogFile()
 		if err != nil {
 			fmt.Println(err.Error())
@@ -137,10 +132,12 @@ func main() {
 		defer f.Close()
 	}
 
+	// === CLI ARGS ===
 	quitFlag := flag.Bool("q", false, "Quit after finishing")
 	flag.Parse()
+	inputArgs := flag.Args()
 
-	for _, arg := range flag.Args() {
+	for _, arg := range inputArgs {
 		if strings.HasSuffix(arg, ".txt") {
 			app.parseTextFile(arg)
 		} else {
@@ -148,6 +145,7 @@ func main() {
 		}
 	}
 
+	// === MAIN LOOP ===
 	for {
 		if len(app.urls) == 0 {
 			app.mainPrompt()
@@ -172,23 +170,4 @@ func main() {
 
 		app.urls = []string{}
 	}
-}
-
-// 🔁 Auto account switcher
-func (app *application) switchAccount() bool {
-	accountMutex.Lock()
-	defer accountMutex.Unlock()
-
-	if len(accounts) < 2 {
-		return false
-	}
-
-	activeAccount = (activeAccount + 1) % len(accounts)
-
-	app.config = accounts[activeAccount].cfg
-	app.bp = accounts[activeAccount].bp
-	app.bs = accounts[activeAccount].bs
-
-	app.LogInfo("🔁 Switched to next account")
-	return true
 }
