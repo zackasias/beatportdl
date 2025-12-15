@@ -12,64 +12,43 @@ import (
 	"unspok3n/beatportdl/internal/beatport"
 )
 
-func Setup() (cfg *config.AppConfig, cachePath string, err error) {
-	configFilePath, exists, err := FindConfigFile()
-	if err != nil {
-		return nil, "", err
+// Setup loads the first valid config YAML and returns the AppConfig.
+func Setup() (cfg *config.AppConfig, err error) {
+	configFiles, err := FindConfigFiles()
+	if err != nil || len(configFiles) == 0 {
+		return nil, fmt.Errorf("no config files found: %w", err)
 	}
 
-	if !exists {
-		fmt.Println("Config file not found, creating a new one:", configFilePath)
-
-		fmt.Print("Username: ")
-		username := GetLine()
-		fmt.Print("Password: ")
-		password := GetLine()
-		fmt.Print("Downloads directory: ")
-		downloadsDir := GetLine()
-
-		cfg := &config.AppConfig{
-			Username:           username,
-			Password:           password,
-			DownloadsDirectory: downloadsDir,
+	var loginSuccess bool
+	for _, cfgPath := range configFiles {
+		parsedConfig, err := config.Parse(cfgPath)
+		if err != nil {
+			fmt.Println("Failed to parse", cfgPath, ":", err)
+			continue
 		}
 
-		fmt.Println("1. Lossless (44.1 khz FLAC)\n2. High (256 kbps AAC)\n3. Medium (128 kbps AAC)\n4. Medium HLS (128 kbps AAC)")
-		for {
-			fmt.Print("Quality: ")
-			qualityNumber := GetLine()
-			switch qualityNumber {
-			case "1":
-				cfg.Quality = "lossless"
-			case "2":
-				cfg.Quality = "high"
-			case "3":
-				cfg.Quality = "medium"
-			case "4":
-				cfg.Quality = "medium-hls"
-			default:
-				fmt.Println("Invalid quality")
-				continue
-			}
-			break
+		auth := beatport.NewAuth(parsedConfig.Username, parsedConfig.Password, "")
+		bp := beatport.New(beatport.StoreBeatport, parsedConfig.Proxy, auth)
+		bs := beatport.New(beatport.StoreBeatsource, parsedConfig.Proxy, auth)
+
+		// Attempt login
+		if err := auth.Init(bp); err != nil {
+			fmt.Println("Login failed with", cfgPath, ", trying next...")
+			continue
 		}
 
-		if err := cfg.Save(configFilePath); err != nil {
-			return nil, configFilePath, fmt.Errorf("save config: %w", err)
-		}
+		fmt.Println("Login successful with", cfgPath)
+		// Set global cfg and Beatport instances in main
+		cfg = parsedConfig
+		loginSuccess = true
+		break
 	}
 
-	parsedConfig, err := config.Parse(configFilePath)
-	if err != nil {
-		return nil, configFilePath, fmt.Errorf("load config: %w", err)
+	if !loginSuccess {
+		return nil, errors.New("all config files failed to login")
 	}
 
-	cacheFilePath, exists, err := FindCacheFile()
-	if err != nil {
-		return nil, configFilePath, fmt.Errorf("get executable path: %w", err)
-	}
-
-	return parsedConfig, cacheFilePath, nil
+	return cfg, nil
 }
 
 func (app *application) mainPrompt() {
@@ -170,13 +149,12 @@ func extractStoreTag(query string) (store, trimmedQuery string) {
 
 func (app *application) parseTextFile(path string) {
 	file, err := os.Open(path)
-	defer file.Close()
 	if err != nil {
 		app.FatalError("read input text file", err)
 	}
-	scanner := bufio.NewScanner(file)
-	scanner.Split(bufio.ScanLines)
+	defer file.Close()
 
+	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		app.urls = append(app.urls, scanner.Text())
 	}
