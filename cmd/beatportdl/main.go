@@ -17,8 +17,12 @@ import (
 )
 
 const (
-	// KEEP this to satisfy utils.go, but cache is DISABLED
+	// REQUIRED by utils.go – do not remove
+	configFilename = "beatportdl-config.yml"
+
+	// Cache completely disabled (no json created)
 	cacheFilename = ""
+
 	errorFilename = "beatportdl-err.log"
 )
 
@@ -42,7 +46,7 @@ type application struct {
 
 func main() {
 
-	// === MULTIPLE ACCOUNT CONFIG FILES ===
+	// === MULTIPLE ACCOUNT YAML FILES ===
 	configFiles := []string{
 		"/home/ubuntu/.config/beatportdl/config1.yml",
 		"/home/ubuntu/.config/beatportdl/config2.yml",
@@ -56,7 +60,7 @@ func main() {
 		loginSuccess bool
 	)
 
-	// === TRY EACH ACCOUNT UNTIL LOGIN SUCCESS ===
+	// === TRY LOGIN WITH EACH CONFIG ===
 	for _, cfgPath := range configFiles {
 
 		var err error
@@ -66,7 +70,7 @@ func main() {
 			continue
 		}
 
-		// CACHE PATH EMPTY → NO JSON CREATED
+		// Empty cache path = NO json file
 		auth = beatport.NewAuth(cfg.Username, cfg.Password, "")
 
 		bp = beatport.New(beatport.StoreBeatport, cfg.Proxy, auth)
@@ -74,13 +78,13 @@ func main() {
 
 		fmt.Println("Logging in:", cfgPath)
 
-		// FORCE LIVE LOGIN (NO CACHE)
+		// Force live login
 		if err := auth.Init(bp); err != nil {
 			fmt.Println("Login failed:", cfgPath)
 			continue
 		}
 
-		fmt.Println("Login successful with:", cfgPath)
+		fmt.Println("Login successful:", cfgPath)
 		loginSuccess = true
 		break
 	}
@@ -132,7 +136,7 @@ func main() {
 		defer f.Close()
 	}
 
-	// === CLI ARGS ===
+	// === CLI ARGUMENTS ===
 	quitFlag := flag.Bool("q", false, "Quit after finishing")
 	flag.Parse()
 	inputArgs := flag.Args()
