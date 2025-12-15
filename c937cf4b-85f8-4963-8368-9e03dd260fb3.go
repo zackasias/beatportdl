@@ -19,6 +19,8 @@ import (
 	"github.com/vbauerster/mpb/v8/decor"
 )
 
+// Remove configFilename and cacheFilename references entirely
+
 func (app *application) globalWorker(fn func()) {
 	app.wg.Add(1)
 
@@ -200,9 +202,9 @@ func WorkingDirFilePath(fileName string) (string, error) {
 	return filePathCurrent, nil
 }
 
-func FindConfigFile() (string, bool, error) {
+// Updated: Finds any YAML config in standard locations
+func FindConfigFiles() ([]string, error) {
 	var additionalDirs []string
-
 	if runtime.GOOS == "linux" {
 		var additionalDir string
 		if xdgCfgHome, exists := os.LookupEnv("XDG_CONFIG_HOME"); exists {
@@ -213,23 +215,22 @@ func FindConfigFile() (string, bool, error) {
 		additionalDirs = append(additionalDirs, additionalDir)
 	}
 
-	return findFile(configFilename, additionalDirs)
-}
-
-func FindCacheFile() (string, bool, error) {
-	var additionalDirs []string
-
-	if runtime.GOOS == "linux" {
-		var additionalDir string
-		if xdgCfgHome, exists := os.LookupEnv("XDG_STATE_HOME"); exists {
-			additionalDir = path.Join(xdgCfgHome, "beatportdl")
-		} else {
-			additionalDir = path.Join(os.Getenv("HOME"), ".local", "state", "beatportdl")
+	var configs []string
+	for _, dir := range additionalDirs {
+		files, err := os.ReadDir(dir)
+		if err != nil {
+			continue
 		}
-		additionalDirs = append(additionalDirs, additionalDir)
+		for _, f := range files {
+			if strings.HasSuffix(f.Name(), ".yml") || strings.HasSuffix(f.Name(), ".yaml") {
+				configs = append(configs, path.Join(dir, f.Name()))
+			}
+		}
 	}
-
-	return findFile(cacheFilename, additionalDirs)
+	if len(configs) == 0 {
+		return nil, fmt.Errorf("no config files found")
+	}
+	return configs, nil
 }
 
 func FindErrorLogFile() (string, bool, error) {
