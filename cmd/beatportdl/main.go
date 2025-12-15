@@ -16,9 +16,11 @@ import (
 	"unspok3n/beatportdl/internal/beatport"
 )
 
+// Restored constant to fix utils.go reference
 const (
-	cacheFilename = "beatportdl-credentials.json"
-	errorFilename = "beatportdl-err.log"
+	configFilename = "beatportdl-config.yml" // required by utils.go
+	cacheFilename  = "beatportdl-credentials.json"
+	errorFilename  = "beatportdl-err.log"
 )
 
 type application struct {
@@ -40,7 +42,7 @@ type application struct {
 }
 
 func main() {
-	// List your YAML files here
+	// List your YAML files here. You can add more if needed.
 	configFiles := []string{
 		"/home/ubuntu/.config/beatportdl/config1.yml",
 		"/home/ubuntu/.config/beatportdl/config2.yml",
